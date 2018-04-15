@@ -1,0 +1,29 @@
+{
+  "name": "mqtt2alexa",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ToSa27/mqtt2alexa.git"
+  },
+  "author": "Tobias Hoff",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/ToSa27/mqtt2alexa/issues"
+  },
+  "homepage": "https://github.com/ToSa27/mqtt2alexa#readme",
+  "dependencies": {
+    "cheerio": "^1.0.0-rc.2",
+    "mqtt": "^2.17.0",
+    "request": "^2.85.0",
+    "request-promise-native": "^1.0.5",
+    "tough-cookie": "^2.3.4",
+    "tough-cookie-filestore": "0.0.1",
+    "yalm": "^4.1.0",
+    "yargs": "^11.0.0"
+  }
+}
