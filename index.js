@@ -7,8 +7,7 @@ const toughCookie = require('tough-cookie');
 const toughCookieFilestore = require('tough-cookie-filestore');
 const request = require('request-promise-native');
 const fs = require('fs');
-//const ws = require('ws');
-const WebSocket = require('ws');
+const ws = require('ws');
 const cheerio = require('cheerio');
 const pkg = require('./package.json');
 const ab2str = require('arraybuffer-to-string');
@@ -23,9 +22,16 @@ if(!fs.existsSync(cookiepath))
     fs.writeFileSync(cookiepath, '');
 var jar = request.jar(new toughCookieFilestore(cookiepath));
 
+// dummys for deps library
 var document = {};
 var window = {};
-//eval(fs.readFileSync(__dirname + '/deps.js').toString());
+var wsdefaults = {};
+
+class WebSocket extends ws {
+    constructor(url) {
+        super(url, wsdefaults);
+    }
+}
 
 const lang='de,en';
 const amazon='amazon.de';
@@ -150,7 +156,7 @@ function alexaLogin() {
     alexaDevices = [];
     fs.writeFileSync(cookiepath, '');
     jar = request.jar(new toughCookieFilestore(cookiepath));
-    alexaGetResponse('login step 1', 'https://alexa.' + amazon)
+    alexaGetResponse('login step 1', 'https://' + alexa)
     .then((response) => {
         var formfields = alexaGetFormFields(response.body, 'name=signIn');
         delete formfields.prepopulatedLoginId;
@@ -165,8 +171,8 @@ function alexaLogin() {
             alexaCurrentUrl += '/' + sessionid;
             alexaGetResponse('login step 3', 'https://www.' + amazon + '/ap/signin', {}, formfields)
             .then((response) => {
-                if (alexaCurrentUrl === 'https://alexa.' + amazon + '/spa/index.html') {
-                    alexaGetResponse('get csrf', 'https://' + alexa + '/api/language', { Origin: 'https://alexa.' + amazon })
+                if (alexaCurrentUrl === 'https://' + alexa + '/spa/index.html') {
+                    alexaGetResponse('get csrf', 'https://' + alexa + '/api/language', { Origin: 'https://' + alexa })
                     .then((response) => {
                         alexaConnect();
                     })
@@ -279,7 +285,7 @@ function start() {
 }
 
 function alexaSendDeviceCommand(device, command, data = null) {
-//https://alexa.amazon.de/api/np/command?deviceSerialNumber=XXXXXXXXXXXXXXXX&deviceType=XXXXXXXXXXXXXX
+    //https://alexa.amazon.de/api/np/command?deviceSerialNumber=XXXXXXXXXXXXXXXX&deviceType=XXXXXXXXXXXXXX
     if (typeof device === 'string') {
         for (var i = 0; i < alexaDevices.length; i++) {
             if (alexaDevices[i].accountName === device)
@@ -350,32 +356,16 @@ function alexaSendDeviceCommand(device, command, data = null) {
     .catch((err) => {
         log.error('command error', err.error);
     });
-
-/*
-    alexaGetResponse('devicecommand ' + device.accountName + ' : ' + command, 'https://' + alexa + '/api/' + api + '?deviceSerialNumber=' + device.serialNumber + '&deviceType=' + device.deviceType + query, {
-        Accept: 'application/json, text/javascript, *' + '/' + '*; q=0.01',
-        'Accept-Encoding': 'gzip, deflate, br',
-        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-        Referer: 'https://alexa.' + amazon + '/spa/index.html',
-        Origin: 'https://alexa.' + amazon,
-        csrf: alexaGetCookie('https://www.' + amazon, 'csrf'),
-        'X-Requested-With': 'XMLHttpRequest'
-    }, data)
-    .then((response) => {
-        log.debug('command response', response);
-    })
-    .catch((err) => {
-        log.error('command error', err);
-    });
-*/
 }
 
 function alexaGetTasks() {
-//https://alexa.amazon.de/api/todos?startTime=&endTime=&completed=&type=TASK&size=100&offset=-1&_=1523718809085
+    //https://alexa.amazon.de/api/todos?startTime=&endTime=&completed=&type=TASK&size=100&offset=-1&_=1523718809085
+    log.warn('tasks not implemented yet');
 }
 
 function alexaGetShoppingItems() {
-//https://alexa.amazon.de/api/todos?startTime=&endTime=&completed=&type=SHOPPING_ITEM&size=100&offset=-1&_=1523718809086
+    //https://alexa.amazon.de/api/todos?startTime=&endTime=&completed=&type=SHOPPING_ITEM&size=100&offset=-1&_=1523718809086
+    log.warn('shopping items not implemented yet');
 }
 
 function alexaQueryTuneinStations(device, query) {
@@ -397,7 +387,8 @@ function alexaQueryTuneinStations(device, query) {
 }
 
 function alexaGetDeviceAudibleBooks() {
-//https://alexa.amazon.de/api/audible/audible-books?deviceSerialNumber=XXXXXXXXXXXXXXXX&deviceType=XXXXXXXXXXXXXX&mediaOwnerCustomerId=XXXXXXXXXXXXXX&_=1523728568156
+    //https://alexa.amazon.de/api/audible/audible-books?deviceSerialNumber=XXXXXXXXXXXXXXXX&deviceType=XXXXXXXXXXXXXX&mediaOwnerCustomerId=XXXXXXXXXXXXXX&_=1523728568156
+    log.warn('audible books not implemented yet'); 
 }
 
 var messaging = function (alexaurl) {
@@ -445,8 +436,8 @@ messaging.prototype = {
         }
         try {
             //this.trigger("message:" + command, payload, command);
-            log.info('message received: command', command);
-            log.info('message received: payload', payload);
+            log.debug('message received: command', command);
+            log.debug('message received: payload', payload);
             if (command != 'PUSH_ACTIVITY') {
                 var device = null;
                 for (var i = 0; i < alexaDevices.length; i++)
@@ -472,7 +463,7 @@ messaging.prototype = {
                             // do nothing for now (payload will still be handled below)
                             break;
                         default:
-                            log.warn('websocket received unknown command', command, payload);
+                            log.warn('websocket received unknown command', command);
                     };
                     if (payload.audioPlayerState)
                         mqttPublish(config.name + '/status/' + device.accountName + '/state', JSON.stringify({ val: payload.audioPlayerState, ts: ts }), {retain: config.mqttRetain});
@@ -493,7 +484,6 @@ messaging.prototype = {
         return this.connection && this.connection.getState() === window.tcomm.Socket.States.OPEN ? this.connection : null;
     },
     reconnect: function () {
-log.debug('reconnect');
         var self = this;
         !this.connection && this.connectionProperties.reconnect && request({
             url: "https://" + this.alexaurl + "/api/ping",
@@ -558,15 +548,16 @@ log.debug('reconnect');
             var msg = { command: "REGISTER_CONNECTION" };
             conn.sendMessage(JSON.stringify(msg), window.tcomm.Channels.DEE_WEBSITE_MESSAGING); 
         } else 
-            throw Error("DeeWebsiteMessaging.sendRegisterConnection: no valid connection to send registration on"); 
+            log.error("DeeWebsiteMessaging.sendRegisterConnection: no valid connection to send registration on"); 
     }
 };
 
 function alexaSubscribeEventsInt() {
     const stage = "prod";
     const realm = "DEAmazon";
+    window.WebSocket = '';
     document.cookie = jar.getCookieString('https://' + amazon);
-    document.wsoptions = {
+    wsdefaults = {
         headers: {
             Origin: 'https://' + alexa,
             'User-Agent': agent,
@@ -603,14 +594,8 @@ function alexaSubscribeEvents() {
                 jar: jar
             })
             .then((body) => {
-                log.debug('websocket dependencies library len', body.length);
                 var deps = body.substr(body.indexOf('window.FastClick=FastClick;') + 'window.FastClick=FastClick;'.length);
-                log.debug('websocket dependencies library len', deps.length);
                 deps = deps.substr(0, deps.indexOf('var requirejs'));
-                log.debug('websocket dependencies library len', deps.length);
-                deps = deps.substr(0, deps.indexOf('if("undefined"===typeof window.WebSocket)throw"Could not open connection. WebSocket unsupported.";')) + deps.substr(deps.indexOf('if("undefined"===typeof window.WebSocket)throw"Could not open connection. WebSocket unsupported.";') + 'if("undefined"===typeof window.WebSocket)throw"Could not open connection. WebSocket unsupported.";'.length);
-                deps = deps.substr(0, deps.indexOf('this.webSocket=new WebSocket(this.url);')) + 'this.webSocket=new WebSocket(this.url,document.wsoptions);' + deps.substr(deps.indexOf('this.webSocket=new WebSocket(this.url);') + 'this.webSocket=new WebSocket(this.url);'.length);
-                log.debug('websocket dependencies library len', deps.length);
                 fs.writeFile(__dirname + '/deps.js', deps, (err) => {
                     if (err)
                         log.error('websocket error writing dependencies library');
@@ -627,7 +612,7 @@ function alexaSubscribeEvents() {
 }
     
 function alexaGetDevicePlayer(device) {
-//https://alexa.amazon.de/api/np/player?deviceSerialNumber=XXXXXXXXXXXXXXXX&deviceType=XXXXXXXXXXXXXX&screenWidth=1360&_=1523718809108
+    //https://alexa.amazon.de/api/np/player?deviceSerialNumber=XXXXXXXXXXXXXXXX&deviceType=XXXXXXXXXXXXXX&screenWidth=1360&_=1523718809108
     var ts = new Date().getTime();
     alexaGetResponse('deviceplayer ' + device.accountName, 'https://alexa.' + amazon + '/api/np/player?deviceSerialNumber=' + device.serialNumber + '&deviceType=' + device.deviceType + '&screenWidth=1360&_=' + ts, {
         Accept: 'application/json, text/javascript, *' + '/' + '*; q=0.01',
@@ -650,7 +635,8 @@ function alexaGetDevicePlayer(device) {
 }
 
 function alexaGetDeviceQueue(device) {
-//https://alexa.amazon.de/api/np/queue?deviceSerialNumber=XXXXXXXXXXXXXXXX&deviceType=XXXXXXXXXXXXXX&size=25&_=1523718809109
+    //https://alexa.amazon.de/api/np/queue?deviceSerialNumber=XXXXXXXXXXXXXXXX&deviceType=XXXXXXXXXXXXXX&size=25&_=1523718809109
+    log.warn('queue not implemented yet'); 
 }
 
 function alexaGetDeviceStatus(device) {
