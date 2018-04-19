@@ -17,12 +17,17 @@
   },
   "homepage": "https://github.com/ToSa27/mqtt2alexa#readme",
   "dependencies": {
+    "arraybuffer-to-string": "^1.0.2",
     "cheerio": "^1.0.0-rc.2",
+    "convert-string": "^0.1.0",
     "mqtt": "^2.17.0",
     "request": "^2.85.0",
     "request-promise-native": "^1.0.5",
+    "string-to-arraybuffer": "^1.0.0",
     "tough-cookie": "^2.3.4",
     "tough-cookie-filestore": "0.0.1",
+    "underscore": "^1.8.3",
+    "ws": "^5.1.1",
     "yalm": "^4.1.0",
     "yargs": "^11.0.0"
   }

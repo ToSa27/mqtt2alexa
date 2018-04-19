@@ -7,20 +7,31 @@ const toughCookie = require('tough-cookie');
 const toughCookieFilestore = require('tough-cookie-filestore');
 const request = require('request-promise-native');
 const fs = require('fs');
+//const ws = require('ws');
+const WebSocket = require('ws');
 const cheerio = require('cheerio');
 const pkg = require('./package.json');
+const ab2str = require('arraybuffer-to-string');
+const str2ab = require('string-to-arraybuffer');
+const _ = require('underscore');
+
+const cookiepath = 'cookies.json';
+var Cookie = toughCookie.Cookie;
+if(!fs.existsSync(cookiepath))
+    fs.writeFileSync(cookiepath, '');
+var jar = request.jar(new toughCookieFilestore(cookiepath));
+
+var document = {
+    cookie: ""
+};
+var window = {};
+eval(fs.readFileSync('deps.js').toString());
 
 const lang='de,en';
 const amazon='amazon.de';
 const alexa='alexa.amazon.de';
 const version=0;
 const agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:58.0) Gecko/20100101 Firefox/58.0';
-const cookiepath = 'cookies.json';
-
-var Cookie = toughCookie.Cookie;
-if(!fs.existsSync(cookiepath))
-    fs.writeFileSync(cookiepath, '');
-var jar = request.jar(new toughCookieFilestore(cookiepath));
 
 let mqtt;
 let mqttConnected = false;
@@ -28,6 +39,7 @@ let alexaConnected = false;
 //let pollingTimer;
 //const pollingInterval = (config.pollingInterval || 10) * 1000;
 var alexaDevices = [];
+var alexaEventWs = null;
 
 function alexaCheckStatus() {
     var options = {
@@ -388,28 +400,196 @@ function alexaGetDeviceAudibleBooks() {
 //https://alexa.amazon.de/api/audible/audible-books?deviceSerialNumber=XXXXXXXXXXXXXXXX&deviceType=XXXXXXXXXXXXXX&mediaOwnerCustomerId=XXXXXXXXXXXXXX&_=1523728568156
 }
 
-function alexaSubscribeDeviceEvents(device) {
-//wss://dp-gw-na.amazon.de/?x-amz-device-type=XXXXXXXXXXXXX&x-amz-device-serial=XXX-XXXXXXX-XXXXXXX-XXXXXXXXXXXXX
-/*
-// ToDo : weird serial number format ?!?
-    device._ws_ = new ws('wss://dp-gw-na.' + amazon + '/?x-amz-device-type=' + device.deviceType + '&x-amz-device-serial=' + device.serialNumber);
-    device._ws_.on('message', (message) => {
-        log.debug('ws message', message);
-    });
-    device._ws_.on('close', (code) => {
-        log.debug('ws disconnected', code);
-    });
-    device._ws_.on('error', (error) => {
-        log.debug('ws error', error);
-    });
-*/
-}
+var messaging = function (alexaurl) {
+    this.alexaurl = alexaurl;
+    this.deviceType = "ALEGCNGL9K0HM";
+    this.connectionProperties = { 
+        secure: !0, 
+        direct: !1, 
+        reconnect: !0 
+    };
+    this.reconnectDelay = 1E3;
+    _.bindAll(this, "onMessage", "connectionOpened", "connectionClosed", "sendRegisterConnection", "getNewConnection", "reconnect");
+};
 
+messaging.prototype = {
+    generateUniqueSerial: function (ubid) {
+        this.deviceSerial = ubid + "-" + Date.now(); 
+    }, 
+    initialize: function (stage, realm) {
+        var ident = window.tcomm.IdentityFactory.getDeviceIdentity(this.deviceType, this.deviceSerial);
+        var signer = new window.tcomm.QueryParamDeviceIdRequestSigner(ident);
+        try { 
+            window.tcomm.CommunicationManager.initializeWithConfig({ 
+                requestSigner: signer, 
+                domain: stage, 
+                realm: realm, 
+                shouldEnableGateway: !0 
+            });
+        } catch (err) {
+            log.error("Caught error while initializing tcomm", err);
+        } finally { 
+            window.tcomm.CommunicationManager.registerMessageHandler(window.tcomm.Channels.DEE_WEBSITE_MESSAGING, this.onMessage);
+            this.reconnect();
+        } 
+        //this.listenTo(backbone, "onMobileAppResume", this.reconnect);
+    },
+    onMessage: function (a, msg) {
+        var payloadstr, command, payload;
+        try {
+            payloadstr = JSON.parse(msg.getPayloadAsString());
+            command = payloadstr.command;
+            payload = JSON.parse(payloadstr.payload);
+        } catch (err) {
+            log.error("Caught error while processing message", msg, err);
+        }
+        try {
+            //this.trigger("message:" + command, payload, command);
+            log.info('message received: command', command);
+            log.info('message received: payload', payload);
+            // ToDo : translate payload.dopplerId.deviceSerialNumber to device name
+            var device = null;
+            for (var i = 0; i < alexaDevices.length; i++)
+                if (alexaDevices[i].serialNumber == payload.dopplerId.deviceSerialNumber) {
+                    device = alexaDevices[i];
+                }
+            if (!device)
+                log.warn('received message for unknown device');
+            else {
+                var ts = new Date().getTime();
+                switch(command) {
+                    case "PUSH_MEDIA_CHANGE":
+                        alexaGetDevicePlayer(device);
+                        break;
+                };
+                if (payload.audioPlayerState)
+                    mqttPublish(config.name + '/status/' + device.accountName + '/state', JSON.stringify({ val: payload.audioPlayerState, ts: ts }), {retain: config.mqttRetain});
+                if (payload.isMuted)
+                    mqttPublish(config.name + '/status/' + device.accountName + '/muted', JSON.stringify({ val: payload.isMuted, ts: ts }), {retain: config.mqttRetain});
+                if (payload.volumeSetting)
+                    mqttPublish(config.name + '/status/' + device.accountName + '/volume', JSON.stringify({ val: payload.volumeSetting, ts: ts }), {retain: config.mqttRetain});
+/*
+                    mqttPublish(config.name + '/status/' + device.accountName + '/progress', JSON.stringify({ val: device._status_.progressSeconds, ts: ts }), {retain: config.mqttRetain});
+                    mqttPublish(config.name + '/status/' + device.accountName + '/contenttype', JSON.stringify({ val: device._status_.contentType, ts: ts }), {retain: config.mqttRetain});
+                    mqttPublish(config.name + '/status/' + device.accountName + '/artist', JSON.stringify({ val: device._player_.infoText.subText1, ts: ts }), {retain: config.mqttRetain});
+                    mqttPublish(config.name + '/status/' + device.accountName + '/album', JSON.stringify({ val: device._player_.infoText.subText2, ts: ts }), {retain: config.mqttRetain});
+                    mqttPublish(config.name + '/status/' + device.accountName + '/title', JSON.stringify({ val: device._player_.infoText.title, ts: ts }), {retain: config.mqttRetain});
+                    mqttPublish(config.name + '/status/' + device.accountName + '/art', JSON.stringify({ val: device._player_.mainArt.url, ts: ts }), {retain: config.mqttRetain});
+                    mqttPublish(config.name + '/status/' + device.accountName + '/progress', JSON.stringify({ val: device._player_.progress.mediaProgress, ts: ts }), {retain: config.mqttRetain});
+                    mqttPublish(config.name + '/status/' + device.accountName + '/duration', JSON.stringify({ val: device._player_.progress.mediaLength, ts: ts }), {retain: config.mqttRetain});
+                    mqttPublish(config.name + '/status/' + device.accountName + '/provider', JSON.stringify({ val: device._player_.provider.providerName, ts: ts }), {retain: config.mqttRetain});
+                    mqttPublish(config.name + '/status/' + device.accountName + '/state', JSON.stringify({ val: device._player_.state, ts: ts }), {retain: config.mqttRetain});
+                    mqttPublish(config.name + '/status/' + device.accountName + '/muted', JSON.stringify({ val: device._player_.volume.muted, ts: ts }), {retain: config.mqttRetain});
+                    mqttPublish(config.name + '/status/' + device.accountName + '/volume', JSON.stringify({ val: device._player_.volume.volume, ts: ts }), {retain: config.mqttRetain});
+*/
+            }
+        } catch (err) {
+            log.error("Caught error while triggering message event " + command, err);
+        }
+    },
+    getDestinationIdentity: function () {
+        return window.tcomm.IdentityFactory.getServiceIdentityFromName("DeeWebsiteMessagingService");
+    },
+    getConnection: function () {
+        return this.connection && this.connection.getState() === window.tcomm.Socket.States.OPEN ? this.connection : null;
+    },
+    reconnect: function () {
+log.debug('reconnect');
+        var self = this;
+        !this.connection && this.connectionProperties.reconnect && request({
+            url: "https://" + this.alexaurl + "/api/ping",
+            qs: { _: new Date().getTime() },
+            jar: jar
+        }, (err, response, body) => {
+            if (err)
+                log.error("No network access detected! Skipping connection attempt for DWMS")
+            else {
+                log.debug("Network detected, attempting to connect DWMS");
+                self.getNewConnection()
+            }
+        });
+    },
+    closeConnection: function () {
+        this.connectionProperties.reconnect = !1; 
+        this.connection && this.connection.release()
+    }, 
+    requestReconnect: function () {
+        clearTimeout(this.nextReconnect);
+        this.nextReconnect = _.delay(this.reconnect, this.reconnectDelay);
+        this.updateDelay();
+    },
+    updateDelay: function (a) {
+        a ? this.reconnectDelay = 1E3 : (a = 1E3 * (Math.random() - 0.5), a = 2 * this.reconnectDelay + a, this.reconnectDelay = Math.min(a, 2E4))
+    },
+    getNewConnection: function () {
+        var dident = this.getDestinationIdentity();
+        var conn = window.tcomm.CommunicationManager.acquireConnection(dident, this.connectionProperties.secure, this.connectionProperties.direct);
+        var self = this;
+        conn.addOpenListener(function () {
+            log.info('connection:opened');
+            self.connectionOpened(conn);
+        });
+        conn.addCloseListener(function () {
+            log.info('connection:closed');
+            self.connectionClosed(conn);
+        })
+    },
+    connectionOpened: function (conn) {
+        conn !== this.connection && this.connection && this.connection.release();
+        this.connection = conn;
+        try {
+            this.sendRegisterConnection();
+            this.updateDelay(!0);
+        } catch (err) {
+            this.connection && this.connection.release();
+            return;
+        }
+        //this.trigger("connection:ready", this.connection);
+        log.info("connection:ready");
+    },
+    connectionClosed: function (conn) {
+        conn === this.connection && (this.connection = null);
+        //this.trigger("connection:lost");
+        log.warn("connection:lost");
+        this.requestReconnect();
+    },
+    sendRegisterConnection: function () {
+        var conn;
+        if (conn = this.getConnection()) {
+            var msg = { command: "REGISTER_CONNECTION" };
+            conn.sendMessage(JSON.stringify(msg), window.tcomm.Channels.DEE_WEBSITE_MESSAGING); 
+        } else 
+            throw Error("DeeWebsiteMessaging.sendRegisterConnection: no valid connection to send registration on"); 
+    }
+};
+
+function alexaSubscribeEvents() {
+    const stage = "prod";
+    const realm = "DEAmazon";
+    document.cookie = jar.getCookieString('https://' + amazon);
+    document.wsoptions = {
+        headers: {
+            Origin: 'https://' + alexa,
+            'User-Agent': agent,
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Accept-Language': lang,
+            'DNT': '1',
+            'Cookie': jar.getCookieString('https://' + amazon)
+        },
+        protocolVersion: 13,
+        perMessageDeflate: true
+    };
+    var m = new messaging(alexa);
+    m.generateUniqueSerial(alexaGetCookie('https://' + amazon, 'ubid-acbde'));
+    m.initialize(stage, realm);
+    setInterval(() => { m.reconnect(); }, 10000);
+}
+    
 function alexaGetDevicePlayer(device) {
 //https://alexa.amazon.de/api/np/player?deviceSerialNumber=XXXXXXXXXXXXXXXX&deviceType=XXXXXXXXXXXXXX&screenWidth=1360&_=1523718809108
     var ts = new Date().getTime();
     alexaGetResponse('deviceplayer ' + device.accountName, 'https://alexa.' + amazon + '/api/np/player?deviceSerialNumber=' + device.serialNumber + '&deviceType=' + device.deviceType + '&screenWidth=1360&_=' + ts, {
-        Accept: 'application/json, text/javascript, */' + '*; q=0.01',
+        Accept: 'application/json, text/javascript, *' + '/' + '*; q=0.01',
         Referer: 'https://alexa.' + amazon + '/spa/index.html'
     })
     .then((response) => {
@@ -472,9 +652,9 @@ function alexaGetDevices() {
                 alexaGetDeviceStatus(device);
                 alexaGetDevicePlayer(device);
                 alexaGetDeviceQueue(device);
-                alexaSubscribeDeviceEvents(device);
             }
         }
+        alexaSubscribeEvents();
     })
     .catch((err) => { log.error('devicelist error', err); });
 }
