@@ -15,17 +15,17 @@ const ab2str = require('arraybuffer-to-string');
 const str2ab = require('string-to-arraybuffer');
 const _ = require('underscore');
 
+var globaleval = eval;
+
 const cookiepath = 'cookies.json';
 var Cookie = toughCookie.Cookie;
 if(!fs.existsSync(cookiepath))
     fs.writeFileSync(cookiepath, '');
 var jar = request.jar(new toughCookieFilestore(cookiepath));
 
-var document = {
-    cookie: ""
-};
+var document = {};
 var window = {};
-eval(fs.readFileSync(__dirname + '/deps.js').toString());
+//eval(fs.readFileSync(__dirname + '/deps.js').toString());
 
 const lang='de,en';
 const amazon='amazon.de';
@@ -458,9 +458,20 @@ messaging.prototype = {
             else {
                 var ts = new Date().getTime();
                 switch(command) {
-                    case "PUSH_MEDIA_CHANGE":
+                    case 'PUSH_MEDIA_CHANGE':
+                    case 'PUSH_AUDIO_PLAYER_STATE':
                         alexaGetDevicePlayer(device);
                         break;
+                    case 'PUSH_CONTENT_FOCUS_CHANGE':
+                    case 'PUSH_MEDIA_QUEUE_CHANGE':
+                    case 'PUSH_BLUETOOTH_STATE_CHANGE':
+                    case 'PUSH_VOLUME_CHANGE':
+                    case 'PUSH_DELETE_DOPPLER_ACTIVITIES':
+                    case 'PUSH_MICROPHONE_STATE':
+                        // do nothing for now (payload will still be handled below)
+                        break;
+                    default:
+                        log.warn('websocket received unknown command', command, payload);
                 };
                 if (payload.audioPlayerState)
                     mqttPublish(config.name + '/status/' + device.accountName + '/state', JSON.stringify({ val: payload.audioPlayerState, ts: ts }), {retain: config.mqttRetain});
@@ -468,20 +479,6 @@ messaging.prototype = {
                     mqttPublish(config.name + '/status/' + device.accountName + '/muted', JSON.stringify({ val: payload.isMuted, ts: ts }), {retain: config.mqttRetain});
                 if (payload.volumeSetting)
                     mqttPublish(config.name + '/status/' + device.accountName + '/volume', JSON.stringify({ val: payload.volumeSetting, ts: ts }), {retain: config.mqttRetain});
-/*
-                    mqttPublish(config.name + '/status/' + device.accountName + '/progress', JSON.stringify({ val: device._status_.progressSeconds, ts: ts }), {retain: config.mqttRetain});
-                    mqttPublish(config.name + '/status/' + device.accountName + '/contenttype', JSON.stringify({ val: device._status_.contentType, ts: ts }), {retain: config.mqttRetain});
-                    mqttPublish(config.name + '/status/' + device.accountName + '/artist', JSON.stringify({ val: device._player_.infoText.subText1, ts: ts }), {retain: config.mqttRetain});
-                    mqttPublish(config.name + '/status/' + device.accountName + '/album', JSON.stringify({ val: device._player_.infoText.subText2, ts: ts }), {retain: config.mqttRetain});
-                    mqttPublish(config.name + '/status/' + device.accountName + '/title', JSON.stringify({ val: device._player_.infoText.title, ts: ts }), {retain: config.mqttRetain});
-                    mqttPublish(config.name + '/status/' + device.accountName + '/art', JSON.stringify({ val: device._player_.mainArt.url, ts: ts }), {retain: config.mqttRetain});
-                    mqttPublish(config.name + '/status/' + device.accountName + '/progress', JSON.stringify({ val: device._player_.progress.mediaProgress, ts: ts }), {retain: config.mqttRetain});
-                    mqttPublish(config.name + '/status/' + device.accountName + '/duration', JSON.stringify({ val: device._player_.progress.mediaLength, ts: ts }), {retain: config.mqttRetain});
-                    mqttPublish(config.name + '/status/' + device.accountName + '/provider', JSON.stringify({ val: device._player_.provider.providerName, ts: ts }), {retain: config.mqttRetain});
-                    mqttPublish(config.name + '/status/' + device.accountName + '/state', JSON.stringify({ val: device._player_.state, ts: ts }), {retain: config.mqttRetain});
-                    mqttPublish(config.name + '/status/' + device.accountName + '/muted', JSON.stringify({ val: device._player_.volume.muted, ts: ts }), {retain: config.mqttRetain});
-                    mqttPublish(config.name + '/status/' + device.accountName + '/volume', JSON.stringify({ val: device._player_.volume.volume, ts: ts }), {retain: config.mqttRetain});
-*/
             }
         } catch (err) {
             log.error("Caught error while triggering message event " + command, err);
@@ -563,7 +560,7 @@ log.debug('reconnect');
     }
 };
 
-function alexaSubscribeEvents() {
+function alexaSubscribeEventsInt() {
     const stage = "prod";
     const realm = "DEAmazon";
     document.cookie = jar.getCookieString('https://' + amazon);
@@ -579,10 +576,52 @@ function alexaSubscribeEvents() {
         protocolVersion: 13,
         perMessageDeflate: true
     };
+    eval(fs.readFileSync(__dirname + '/deps.js').toString());
     var m = new messaging(alexa);
     m.generateUniqueSerial(alexaGetCookie('https://' + amazon, 'ubid-acbde'));
     m.initialize(stage, realm);
     setInterval(() => { m.reconnect(); }, 10000);
+}
+
+function alexaSubscribeEvents() {
+    fs.access(__dirname + '/deps.js', fs.constants.R_OK, (err) => {
+        if (err) {
+            log.info('websocket pulling dependencies library');
+            request({
+                method: 'GET',
+                url: 'https://' + alexa + '/lib/47099-deps.min.js',
+                headers: {
+                    Origin: 'https://' + alexa,
+                    'User-Agent': agent,
+//                    'Accept-Encoding': 'gzip, deflate, br',
+                    'Accept-Language': lang,
+                    'DNT': '1',
+                    'Connection': 'keep-alive'
+                },
+                jar: jar
+            })
+            .then((body) => {
+                log.debug('websocket dependencies library len', body.length);
+                var deps = body.substr(body.indexOf('window.FastClick=FastClick;') + 'window.FastClick=FastClick;'.length);
+                log.debug('websocket dependencies library len', deps.length);
+                deps = deps.substr(0, deps.indexOf('var requirejs'));
+                log.debug('websocket dependencies library len', deps.length);
+                deps = deps.substr(0, deps.indexOf('if("undefined"===typeof window.WebSocket)throw"Could not open connection. WebSocket unsupported.";')) + deps.substr(deps.indexOf('if("undefined"===typeof window.WebSocket)throw"Could not open connection. WebSocket unsupported.";') + 'if("undefined"===typeof window.WebSocket)throw"Could not open connection. WebSocket unsupported.";'.length);
+                deps = deps.substr(0, deps.indexOf('this.webSocket=new WebSocket(this.url);')) + 'this.webSocket=new WebSocket(this.url,document.wsoptions);' + deps.substr(deps.indexOf('this.webSocket=new WebSocket(this.url);') + 'this.webSocket=new WebSocket(this.url);'.length);
+                log.debug('websocket dependencies library len', deps.length);
+                fs.writeFile(__dirname + '/deps.js', deps, (err) => {
+                    if (err)
+                        log.error('websocket error writing dependencies library');
+                    else
+                        alexaSubscribeEventsInt();
+                });
+            })
+            .catch((err) => {
+                log.error('websocket error pulling dependencies library', err);
+            });
+        } else
+            alexaSubscribeEventsInt();
+    });
 }
     
 function alexaGetDevicePlayer(device) {

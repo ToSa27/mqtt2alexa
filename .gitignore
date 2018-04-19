@@ -59,4 +59,4 @@ typings/
 
 # specific config and data files
 cookies.json
-
+deps.js
