@@ -447,38 +447,40 @@ messaging.prototype = {
             //this.trigger("message:" + command, payload, command);
             log.info('message received: command', command);
             log.info('message received: payload', payload);
-            // ToDo : translate payload.dopplerId.deviceSerialNumber to device name
-            var device = null;
-            for (var i = 0; i < alexaDevices.length; i++)
-                if (alexaDevices[i].serialNumber == payload.dopplerId.deviceSerialNumber) {
-                    device = alexaDevices[i];
+            if (command != 'PUSH_ACTIVITY') {
+                var device = null;
+                for (var i = 0; i < alexaDevices.length; i++)
+                    if (alexaDevices[i].serialNumber == payload.dopplerId.deviceSerialNumber) {
+                        device = alexaDevices[i];
+                    }
+                if (!device)
+                    log.warn('received message for unknown device');
+                else {
+                    var ts = new Date().getTime();
+                    switch(command) {
+                        case 'PUSH_MEDIA_CHANGE':
+                        case 'PUSH_AUDIO_PLAYER_STATE':
+                            alexaGetDevicePlayer(device);
+                            break;
+                        case 'PUSH_CONTENT_FOCUS_CHANGE':
+                        case 'PUSH_MEDIA_QUEUE_CHANGE':
+                        case 'PUSH_BLUETOOTH_STATE_CHANGE':
+                        case 'PUSH_VOLUME_CHANGE':
+                        case 'PUSH_DOPPLER_CONNECTION_CHANGE':
+                        case 'PUSH_DELETE_DOPPLER_ACTIVITIES':
+                        case 'PUSH_MICROPHONE_STATE':
+                            // do nothing for now (payload will still be handled below)
+                            break;
+                        default:
+                            log.warn('websocket received unknown command', command, payload);
+                    };
+                    if (payload.audioPlayerState)
+                        mqttPublish(config.name + '/status/' + device.accountName + '/state', JSON.stringify({ val: payload.audioPlayerState, ts: ts }), {retain: config.mqttRetain});
+                    if (payload.isMuted)
+                        mqttPublish(config.name + '/status/' + device.accountName + '/muted', JSON.stringify({ val: payload.isMuted, ts: ts }), {retain: config.mqttRetain});
+                    if (payload.volumeSetting)
+                        mqttPublish(config.name + '/status/' + device.accountName + '/volume', JSON.stringify({ val: payload.volumeSetting, ts: ts }), {retain: config.mqttRetain});
                 }
-            if (!device)
-                log.warn('received message for unknown device');
-            else {
-                var ts = new Date().getTime();
-                switch(command) {
-                    case 'PUSH_MEDIA_CHANGE':
-                    case 'PUSH_AUDIO_PLAYER_STATE':
-                        alexaGetDevicePlayer(device);
-                        break;
-                    case 'PUSH_CONTENT_FOCUS_CHANGE':
-                    case 'PUSH_MEDIA_QUEUE_CHANGE':
-                    case 'PUSH_BLUETOOTH_STATE_CHANGE':
-                    case 'PUSH_VOLUME_CHANGE':
-                    case 'PUSH_DELETE_DOPPLER_ACTIVITIES':
-                    case 'PUSH_MICROPHONE_STATE':
-                        // do nothing for now (payload will still be handled below)
-                        break;
-                    default:
-                        log.warn('websocket received unknown command', command, payload);
-                };
-                if (payload.audioPlayerState)
-                    mqttPublish(config.name + '/status/' + device.accountName + '/state', JSON.stringify({ val: payload.audioPlayerState, ts: ts }), {retain: config.mqttRetain});
-                if (payload.isMuted)
-                    mqttPublish(config.name + '/status/' + device.accountName + '/muted', JSON.stringify({ val: payload.isMuted, ts: ts }), {retain: config.mqttRetain});
-                if (payload.volumeSetting)
-                    mqttPublish(config.name + '/status/' + device.accountName + '/volume', JSON.stringify({ val: payload.volumeSetting, ts: ts }), {retain: config.mqttRetain});
             }
         } catch (err) {
             log.error("Caught error while triggering message event " + command, err);
