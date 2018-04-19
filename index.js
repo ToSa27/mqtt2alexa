@@ -25,7 +25,7 @@ var document = {
     cookie: ""
 };
 var window = {};
-eval(fs.readFileSync('deps.js').toString());
+eval(fs.readFileSync(__dirname + '/deps.js').toString());
 
 const lang='de,en';
 const amazon='amazon.de';
