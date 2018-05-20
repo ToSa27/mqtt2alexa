@@ -729,7 +729,7 @@ var webDevices = [];
 
 function webLoadDevices() {
     try {
-        webDevices = JSON.parse(fs.readFileSync('./conf/devices.json'));
+        webDevices = JSON.parse(fs.readFileSync(__dirname + '/conf/devices.json'));
     } catch (err) {
         webDevices = [];
     }
@@ -743,8 +743,8 @@ function webStart() {
     webServer = express();
     webServer.use(express.json());
     https.createServer({
-        key: fs.readFileSync('./certs/privkey.pem'),
-        cert: fs.readFileSync('./certs/fullchain.pem')
+        key: fs.readFileSync(__dirname + '/certs/privkey.pem'),
+        cert: fs.readFileSync(__dirname + '/certs/fullchain.pem')
     }, webServer).listen(config.port);
 
     webServer.post('/', (req, res) => {
@@ -1033,7 +1033,7 @@ function webSendStatus(sta, val, ts) {
 
 function webLoadBearer() {
     try {
-        webBearer = JSON.parse(fs.readFileSync('./conf/bearer.json'));
+        webBearer = JSON.parse(fs.readFileSync(__dirname + '/conf/bearer.json'));
     } catch (err) {
         webBearer = null;
     }
@@ -1047,7 +1047,7 @@ function webSaveBearer(bearer) {
     if (webTokenTimeout)
         clearTimeout(webTokenTimeout);
     webTokenTimeout = setTimeout(webRefreshToken, bearer.expires_in * 980);
-    fs.writeFile('./conf/bearer.json', JSON.stringify(bearer), (err) => {
+    fs.writeFile(__dirname + '/conf/bearer.json', JSON.stringify(bearer), (err) => {
         if (err)
             log.error('error writing bearer', err);
     });
