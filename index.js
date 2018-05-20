@@ -12,9 +12,10 @@ const cheerio = require('cheerio');
 const pkg = require('./package.json');
 const ab2str = require('arraybuffer-to-string');
 const str2ab = require('string-to-arraybuffer');
+const express = require('express');
+const http = require('http');
+const https = require('https');
 const _ = require('underscore');
-
-var globaleval = eval;
 
 const cookiepath = 'cookies.json';
 var Cookie = toughCookie.Cookie;
@@ -42,8 +43,6 @@ const agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:58.0) Gecko/20100101 F
 let mqtt;
 let mqttConnected = false;
 let alexaConnected = false;
-//let pollingTimer;
-//const pollingInterval = (config.pollingInterval || 10) * 1000;
 var alexaDevices = [];
 var alexaEventWs = null;
 
@@ -204,15 +203,20 @@ function start() {
     log.setLevel(config.verbosity);
     log.info(pkg.name + ' ' + pkg.version + ' starting');
 
-    log.debug('amazon account', config.account);
-    alexaCheckStatus()
-    .then((status) => {
-        if (!status)
-            alexaLogin();
-    })
-    .catch((err) => {
-        process.exit(1);
-    });
+    log.debug('starting web hook for alexa smart home skill');
+    webStart();
+
+    if (config.account && config.account.length > 0) {
+        log.debug('amazon account', config.account);
+        alexaCheckStatus()
+        .then((status) => {
+            if (!status)
+                alexaLogin();
+        })
+        .catch((err) => {
+            process.exit(1);
+        });
+    }
 
     log.info('mqtt trying to connect', config.mqttUrl);
 
@@ -266,21 +270,24 @@ function start() {
         } else if (!isNaN(payload)) {
             payload = parseFloat(payload);
         }
-        const [, method, device, type] = topic.split('/');
+        const [adapter, method, device, type] = topic.split('/');
 
-        switch (method) {
-            case 'set':
-                switch (type) {
-                    case 'command':
-                        alexaSendDeviceCommand(device, payload.val, payload.data);
-                        break;
-                    default:
-                        log.error('unknown method', method);
-                }
-                break;
-            default:
-                log.error('unknown method', method);
-        }
+        if (adapter === config.name)
+            switch (method) {
+                case 'set':
+                    switch (type) {
+                        case 'command':
+                            alexaSendDeviceCommand(device, payload.val, payload.data);
+                            break;
+                        default:
+                            log.error('unknown method', method);
+                    }
+                    break;
+                default:
+                    log.error('unknown method', method);
+            }
+
+        webStatusCheck(topic, payload);
     });
 }
 
@@ -370,10 +377,10 @@ function alexaGetShoppingItems() {
 
 function alexaQueryTuneinStations(device, query) {
     var ts = new Date().getTime();
-    alexaGetResponse('devicestations', 'https://alexa.' + amazon + '/api/tunein/search?query=' + query + '&mediaOwnerCustomerId=' +  + '&_=' + ts, {
+    alexaGetResponse('devicestations', 'https://' + alexa + '/api/tunein/search?query=' + query + '&mediaOwnerCustomerId=' +  + '&_=' + ts, {
         Accept: 'application/json, text/javascript, */' + '*; q=0.01',
 //        'Accept-Encoding': 'gzip, deflate, br',
-        Referer: 'https://alexa.' + amazon + '/spa/index.html'
+        Referer: 'https://' + alexa + '/spa/index.html'
     })
     .then((response) => {
         var stations = JSON.parse(response.body).browseList;
@@ -499,9 +506,9 @@ messaging.prototype = {
         });
     },
     closeConnection: function () {
-        this.connectionProperties.reconnect = !1; 
+        this.connectionProperties.reconnect = !1;
         this.connection && this.connection.release()
-    }, 
+    },
     requestReconnect: function () {
         clearTimeout(this.nextReconnect);
         this.nextReconnect = _.delay(this.reconnect, this.reconnectDelay);
@@ -573,6 +580,7 @@ function alexaSubscribeEventsInt() {
     var m = new messaging(alexa);
     m.generateUniqueSerial(alexaGetCookie('https://' + amazon, 'ubid-acbde'));
     m.initialize(stage, realm);
+    // ToDo : this is a really bad approach - on the other hand the original code is calling reconnect from several different places just in case...
     setInterval(() => { m.reconnect(); }, 10000);
 }
 
@@ -614,9 +622,9 @@ function alexaSubscribeEvents() {
 function alexaGetDevicePlayer(device) {
     //https://alexa.amazon.de/api/np/player?deviceSerialNumber=XXXXXXXXXXXXXXXX&deviceType=XXXXXXXXXXXXXX&screenWidth=1360&_=1523718809108
     var ts = new Date().getTime();
-    alexaGetResponse('deviceplayer ' + device.accountName, 'https://alexa.' + amazon + '/api/np/player?deviceSerialNumber=' + device.serialNumber + '&deviceType=' + device.deviceType + '&screenWidth=1360&_=' + ts, {
+    alexaGetResponse('deviceplayer ' + device.accountName, 'https://' + alexa + '/api/np/player?deviceSerialNumber=' + device.serialNumber + '&deviceType=' + device.deviceType + '&screenWidth=1360&_=' + ts, {
         Accept: 'application/json, text/javascript, *' + '/' + '*; q=0.01',
-        Referer: 'https://alexa.' + amazon + '/spa/index.html'
+        Referer: 'https://' + alexa + '/spa/index.html'
     })
     .then((response) => {
         device._player_ = JSON.parse(response.body).playerInfo;
@@ -642,9 +650,9 @@ function alexaGetDeviceQueue(device) {
 function alexaGetDeviceStatus(device) {
     //https://alexa.amazon.de/api/media/state?deviceSerialNumber=XXXXXXXXXXXXXXXX&deviceType=XXXXXXXXXXXXXX&screenWidth=1360&_=1523728567874
     var ts = new Date().getTime();
-    alexaGetResponse('devicestatus ' + device.accountName, 'https://alexa.' + amazon + '/api/media/state?deviceSerialNumber=' + device.serialNumber + '&deviceType=' + device.deviceType + '&screenWidth=1360&_=' + ts, {
+    alexaGetResponse('devicestatus ' + device.accountName, 'https://' + alexa + '/api/media/state?deviceSerialNumber=' + device.serialNumber + '&deviceType=' + device.deviceType + '&screenWidth=1360&_=' + ts, {
         Accept: 'application/json, text/javascript, */' + '*; q=0.01',
-        Referer: 'https://alexa.' + amazon + '/spa/index.html'
+        Referer: 'https://' + alexa + '/spa/index.html'
     })
     .then((response) => {
         log.debug('devicestatus body', response.body);
@@ -664,8 +672,8 @@ function alexaGetDevices() {
     var ts = new Date().getTime();
     alexaGetResponse('devicelist', 'https://' + alexa + '/api/devices-v2/device?cached=false', {
         'Content-Type': 'application/json; charset=UTF-8' ,
-        Referer: 'https://alexa.' + amazon + '/spa/index.html',
-        Origin: 'https://alexa.' + amazon,
+        Referer: 'https://' + alexa + '/spa/index.html',
+        Origin: 'https://' + alexa,
         csrf: alexaGetCookie('https://www.' + amazon, 'csrf')
     })
     .then((response) => {
@@ -712,6 +720,415 @@ function mqttPublish(topic, payload, options) {
     }
     log.debug('mqtt >', topic, payload);
     mqtt.publish(topic, payload, options);
+}
+
+var webServer;
+var webBearer;
+var webStatus = [];
+var webDevices = [];
+
+function webLoadDevices() {
+    try {
+        webDevices = JSON.parse(fs.readFileSync('./conf/devices.json'));
+    } catch (err) {
+        webDevices = [];
+    }
+}
+
+function webStart() {
+    webLoadBearer();
+    webLoadDevices();
+
+    log.debug('starting server on port', config.port);
+    webServer = express();
+    webServer.use(express.json());
+    https.createServer({
+        key: fs.readFileSync('./certs/privkey.pem'),
+        cert: fs.readFileSync('./certs/fullchain.pem')
+    }, webServer).listen(config.port);
+
+    webServer.post('/', (req, res) => {
+        log.debug('rx', req.url);
+        var header = req.body.directive.header;
+        log.debug('rx header', header);
+        var endpoint = req.body.directive.endpoint;
+        var dev = endpoint ? webDevices.find(o => o.id === endpoint.endpointId) : null;
+        log.debug('rx endpoint', endpoint);
+        var payload = req.body.directive.payload;
+        log.debug('rx payload', payload);
+        var resp = {
+            event: {
+                header: {
+                    namespace: header.namespace,
+                    name: header.name + '.Response',
+                    payloadVersion: header.payloadVersion,
+                    messageId: header.messageId + '-R'
+                },
+                payload: {}
+            }
+        };
+        switch (header.namespace) {
+            case "Alexa":
+                switch (header.name) {
+                    case "ReportState":
+                        resp.event.header.name = "StateReport";
+                        resp.event.header.correlationToken = header.correlationToken;
+                        resp.event.endpoint = {
+                            endpointId: endpoint.endpointId,
+                            cookie: {}
+                        };
+                        resp.context = {
+                            properties: webStatusProperties(endpoint.endpointId)
+                        };
+                        break;
+                    default:
+                        log.warn('unknown name', header.name);
+                }
+                break;
+            case "Alexa.Authorization":
+                switch (header.name) {
+                    case "AcceptGrant":
+                        webGetToken(payload.grant.code).then().catch();
+                        break;
+                    default:
+                        log.warn('unknown name', header.name);
+                }
+                break;
+            case "Alexa.Discovery":
+                switch (header.name) {
+                    case "Discover":
+                        resp.event.payload.endpoints = [];
+                        webDevices.forEach((device) => {
+                            resp.event.payload.endpoints.push(webDeviceAlexa(device));
+                        });
+                        break;
+                    default:
+                        log.warn('unknown name', header.name);
+                }
+                break;
+            case "Alexa.PowerController":
+                switch (header.name) {
+                    case "TurnOn":
+                    case "TurnOff":
+                        log.debug('TurnOnOff');
+                        if (dev && dev.commands && dev.commands.OnOff) {
+                            if (Array.isArray(dev.commands.OnOff)) {
+                                log.debug('TurnOnOff has dev commands', dev.commands.OnOff);
+                                dev.commands.OnOff.forEach((cmd) => {
+                                    var val = (header.name == "TurnOn" ? cmd.val.on : cmd.val.off);
+                                    log.debug('TurnOnOff has val', val);
+                                    if (val != null)
+                                        mqttPublish(cmd.adapter + "/set/" + cmd.device + (cmd.suffix || "") + "/" + cmd.param, JSON.stringify({ val: val }));
+                                });
+                            } else {
+                                log.debug('TurnOnOff has dev command', dev.commands.OnOff);
+                                var val = (header.name == "TurnOn" ? dev.commands.OnOff.val.on : dev.commands.OnOff.val.off);
+                                log.debug('TurnOnOff has val', val);
+                                if (val != null)
+                                    mqttPublish(dev.adapter + "/set/" + dev.device + (dev.commands.OnOff.suffix || "") + "/" + dev.commands.OnOff.param, JSON.stringify({ val: val }));
+                            }
+                        }
+                        resp.event.header.namespace = "Alexa";
+                        resp.event.header.name = "Response";
+                        resp.event.header.correlationToken = header.correlationToken;
+                        resp.event.endpoint = endpoint;
+                        
+//                        resp.event.endpoint = {
+                        //    scope: {
+                        //        type: "BearerToken",
+                        //        token: webBearer.access_token
+                        //    },
+//                            endpointId: endpoint.endpointId
+//                        };
+                        // ToDo
+                        /*
+                        resp.context = {
+                            properties: webStatusProperties(endpoint.endpointId)
+                        };
+                        resp.context = {
+                            "properties": [ {
+                                "namespace": "Alexa.PowerController",
+                                "name": "powerState",
+                                "value": header.name == "TurnOn" ? "ON" : "OFF",
+                                "timeOfSample": new Date().toISOString(),
+                                "uncertaintyInMilliseconds": 0
+                            } ]
+                        };
+*/
+                        break;
+                    default:
+                        log.warn('unknown name', header.name);
+                }
+                break;
+            default:
+                log.warn('unknown namespace', header.namespace);
+        }
+        log.debug('tx response', JSON.stringify(resp));
+        res.send(JSON.stringify(resp));
+    });
+}
+
+function webDeviceAlexa(device) {
+    var ep = {
+        endpointId: device.id,
+        friendlyName: device.voice,
+        description: device.id,
+        manufacturerName: device.adapter,
+        displayCategories: [],
+        cookie: {},
+        capabilities: [
+            {
+                type: "AlexaInterface",
+                interface: "Alexa",
+                version: "3"                            
+            }
+        ]
+    };
+    device.types.forEach((type) => {
+        ep.displayCategories.push(type.toUpperCase());
+    });
+    if (device.status && device.status.Unreachable) {
+        ep.capabilities.push({
+            type: "AlexaInterface",
+            interface: "Alexa.EndpointHealth",
+            version: "3",
+            properties: {
+                supported: [
+                    {
+                        name: "connectivity"
+                    }
+                ],
+                proactivelyReported: true,
+                retrievable: true
+            }
+        });
+        webStatusAdd({
+            endpoint: ep.endpointId,
+            interface: "Alexa.EndpointHealth",
+            property: "connectivity",
+            topic: device.adapter + "/status/" + device.device + (device.status.Unreachable.suffix || "") + "/" + device.status.Unreachable.param,
+            translate: [
+                { mqtt: true, alexa: 'UNREACHABLE' },
+                { mqtt: false, alexa: 'OK' }
+            ]
+        });
+    }
+    if (device.commands && device.commands.OnOff) {
+        ep.capabilities.push({
+            type: "AlexaInterface",
+            interface: "Alexa.PowerController",
+            version: "3",
+            properties: {
+                supported: [
+                    {
+                        name: "powerState"
+                    }
+                ],
+                proactivelyReported: (device.status != null && device.status.OnOff != null),
+                retrievable: (device.status != null && device.status.OnOff != null)
+            }
+        });
+    }
+    if (device.status && device.status.OnOff) {
+        webStatusAdd({
+            endpoint: ep.endpointId,
+            interface: "Alexa.EndpointHealth",
+            property: "powerState",
+            topic: device.adapter + "/status/" + device.device + (device.status.OnOff.suffix || "") + "/" + device.status.OnOff.param,
+            translate: [
+                { mqtt: true, alexa: 'ON' },
+                { mqtt: false, alexa: 'OFF' }
+            ]
+        });
+    }
+    return ep;
+}
+
+function webMessageId() {
+    var d = new Date().getTime();
+    var uuid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+        var r = (d + Math.random() * 16) % 16 | 0;
+        d = Math.floor(d / 16);
+        return (c == 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+    });
+    return uuid;
+}
+
+function webStatusAdd(sta) {
+    if (!webStatus.find(o => o.endpoint === sta.endpoint && o.interface === sta.interface && o.property === sta.property && o.filter === sta.filter && o.topic === sta.topic)) {
+        log.debug('listen for change', sta.endpoint, sta.property, sta.topic);
+        webStatus.push(sta);
+        mqtt.subscribe(sta.topic);
+    }
+}
+
+function webStatusCheck(topic, payload) {
+    webSendStatus(webStatus.find(o => o.topic === topic), payload.val, payload.ts || new Date().getTime());
+}
+
+function webSendStatus(sta, val, ts) {
+    if (!sta) return;
+    var wval = sta.translate ? sta.translate.find(o => o.mqtt === val).alexa : val;        
+    if (sta.filter && sta.filter != wval)
+        return;
+    sta.val = {
+        mqtt: val,
+        alexa: wval,
+        ts: ts
+    };
+    log.debug('sending change report', sta.property, val, wval);
+    request({
+        method: "POST",
+        url: "https://api.eu.amazonalexa.com/v3/events",
+        headers: {
+            Authorization: "Bearer " + webBearer.access_token,
+        },
+        json: {
+            context: {},
+            event: {
+                header: {
+                    messageId: webMessageId(),
+                    namespace: "Alexa",
+                    name: "ChangeReport",
+                    payloadVersion: "3"
+                },
+                endpoint: {
+                    scope: {
+                        type: "BearerToken",
+                        token: webBearer.access_token
+                    },
+                    endpointId: sta.endpoint
+                },
+                payload: {
+                    change: {
+                        cause: {
+                            type: "PHYSICAL_INTERACTION"
+                        },
+                        properties: [
+                            {
+                                namespace: sta.interface,
+                                name: sta.property,
+                                value: {
+                                    value: wval
+                                },
+                                timeOfSample: new Date(ts).toISOString(),
+                                uncertaintyInMilliseconds: 0
+                            }
+                        ]
+                    }
+                }
+            }
+        }
+    })
+    .then((res) => {})
+    .catch((err) => {
+        log.error('error sending change report');
+        if (err.statusCode == 401) {
+            webRefreshToken(sta, val, ts)
+            .then(() => {})
+            .catch((err) => {});
+        }
+    });
+}
+
+function webLoadBearer() {
+    try {
+        webBearer = JSON.parse(fs.readFileSync('./conf/bearer.json'));
+    } catch (err) {
+        webBearer = null;
+    }
+}
+
+var webTokenTimeout;
+var webTokenRefreshing = false;
+
+function webSaveBearer(bearer) {
+    webBearer = bearer;
+    if (webTokenTimeout)
+        clearTimeout(webTokenTimeout);
+    webTokenTimeout = setTimeout(webRefreshToken, bearer.expires_in * 980);
+    fs.writeFile('./conf/bearer.json', JSON.stringify(bearer), (err) => {
+        if (err)
+            log.error('error writing bearer', err);
+    });
+}
+
+function webGetToken(code) {
+    log.debug('token request');
+    return new Promise((resolve, reject) => {
+        request({
+            method: "POST",
+            url: "https://api.amazon.com/auth/o2/token",
+            headers: {
+                "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"
+            },
+            body: "grant_type=authorization_code&code=" + code + "&client_id=" + config.clientid + "&client_secret=" + config.clientsecret
+        })
+        .then((body) => {
+            log.debug('token request response', body);
+            webSaveBearer(JSON.parse(body)); 
+            resolve();
+        })
+        .catch((err) => {
+            log.warn('failed to get token', err);
+            reject(err);
+        });
+    });
+}
+
+var webRefreshWaiting = [];
+
+function webRefreshToken(sta = null, val = null, ts = null) {
+    log.debug('token refresh');
+    return new Promise((resolve, reject) => {
+        if (sta && val && ts)
+            webRefreshWaiting.push({ sta: sta, val: val, ts: ts });
+        if (webTokenRefreshing) {
+            resolve();
+        } else {
+            webTokenRefreshing = true;
+                request({
+                    method: "POST",
+                    url: "https://api.amazon.com/auth/o2/token",
+                    headers: {
+                        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"
+                    },
+                    body: "grant_type=refresh_token&refresh_token=" + webBearer.refresh_token + "&client_id=" + config.clientid + "&client_secret=" + config.clientsecret
+                })
+                .then((body) => {
+                    log.debug('token refresh response', body);
+                    webSaveBearer(JSON.parse(body)); 
+                    webTokenRefreshing = false;
+                    webRefreshWaiting.forEach((req) => {
+                        webSendStatus(req.sta, req.val, req.ts);
+                    });
+                    resolve();
+                })
+                .catch((err) => {
+                    log.warn('failed to refresh token', err);
+                    webTokenRefreshing = false;
+                    reject(err);
+                });
+        }
+    });
+}
+
+function webStatusProperties(endpointId) {
+    var props = [];
+    webStatus.forEach((prop) => {
+        if (prop.endpoint === endpointId) {
+            if (prop.val) {
+                props.push({
+                    namespace: prop.interface,
+                    name: prop.property,
+                    value: prop.val.alexa,
+                    timeOfSample: new Date(prop.val.ts).toISOString(),
+                    uncertaintyInMilliseconds: 0
+                });
+            }
+        }
+    });
+    return props;
 }
 
 start();
