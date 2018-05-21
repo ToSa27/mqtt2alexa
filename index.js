@@ -17,7 +17,7 @@ const http = require('http');
 const https = require('https');
 const _ = require('underscore');
 
-const cookiepath = 'cookies.json';
+const cookiepath = __dirname + '/conf/cookies.json';
 var Cookie = toughCookie.Cookie;
 if(!fs.existsSync(cookiepath))
     fs.writeFileSync(cookiepath, '');
