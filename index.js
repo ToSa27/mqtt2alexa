@@ -21,7 +21,14 @@ const cookiepath = __dirname + '/conf/cookies.json';
 var Cookie = toughCookie.Cookie;
 if(!fs.existsSync(cookiepath))
     fs.writeFileSync(cookiepath, '');
-var jar = request.jar(new toughCookieFilestore(cookiepath));
+var jar;
+try {
+    jar = request.jar(new toughCookieFilestore(cookiepath));
+} catch {
+    log.warn('clearing corrupt cookie jar');
+    fs.writeFileSync(cookiepath, '');
+    jar = request.jar(new toughCookieFilestore(cookiepath));    
+}
 
 // dummys for deps library
 var document = {};
@@ -832,29 +839,6 @@ function webStart() {
                         resp.event.header.name = "Response";
                         resp.event.header.correlationToken = header.correlationToken;
                         resp.event.endpoint = endpoint;
-                        
-//                        resp.event.endpoint = {
-                        //    scope: {
-                        //        type: "BearerToken",
-                        //        token: webBearer.access_token
-                        //    },
-//                            endpointId: endpoint.endpointId
-//                        };
-                        // ToDo
-                        /*
-                        resp.context = {
-                            properties: webStatusProperties(endpoint.endpointId)
-                        };
-                        resp.context = {
-                            "properties": [ {
-                                "namespace": "Alexa.PowerController",
-                                "name": "powerState",
-                                "value": header.name == "TurnOn" ? "ON" : "OFF",
-                                "timeOfSample": new Date().toISOString(),
-                                "uncertaintyInMilliseconds": 0
-                            } ]
-                        };
-*/
                         break;
                     default:
                         log.warn('unknown name', header.name);
@@ -932,13 +916,26 @@ function webDeviceAlexa(device) {
     if (device.status && device.status.OnOff) {
         webStatusAdd({
             endpoint: ep.endpointId,
-            interface: "Alexa.EndpointHealth",
+//            interface: "Alexa.EndpointHealth",
+            interface: "Alexa.PowerController",
             property: "powerState",
             topic: device.adapter + "/status/" + device.device + (device.status.OnOff.suffix || "") + "/" + device.status.OnOff.param,
             translate: [
                 { mqtt: true, alexa: 'ON' },
                 { mqtt: false, alexa: 'OFF' }
             ]
+        });
+    }
+    if (device.status && device.status.Temperature) {
+        webStatusAdd({
+            endpoint: ep.endpointId,
+            interface: "Alexa.TemperatureSensor",
+            property: "temperature",
+            topic: device.adapter + "/status/" + device.device + (device.status.Temperature.suffix || "") + "/" + device.status.Temperature.param,
+//            translate: [
+//                { mqtt: true, alexa: 'ON' },
+//                { mqtt: false, alexa: 'OFF' }
+//            ]
         });
     }
     return ep;
@@ -968,7 +965,15 @@ function webStatusCheck(topic, payload) {
 
 function webSendStatus(sta, val, ts) {
     if (!sta) return;
-    var wval = sta.translate ? sta.translate.find(o => o.mqtt === val).alexa : val;        
+    var wval = val;
+    switch (sta.valtype) {
+        case "translate":
+            wval = sta.translate.find(o => o.mqtt === val).alexa;
+            break;
+        case "double":
+            wval = parseFloat(val);
+            break;        
+    }
     if (sta.filter && sta.filter != wval)
         return;
     sta.val = {
@@ -977,48 +982,51 @@ function webSendStatus(sta, val, ts) {
         ts: ts
     };
     log.debug('sending change report', sta.property, val, wval);
+    var reqjson = {
+        context: {},
+        event: {
+            header: {
+                messageId: webMessageId(),
+                namespace: "Alexa",
+                name: "ChangeReport",
+                payloadVersion: "3"
+            },
+            endpoint: {
+                scope: {
+                    type: "BearerToken",
+                    token: webBearer.access_token
+                },
+                endpointId: sta.endpoint
+            },
+            payload: {
+                change: {
+                    cause: {
+                        type: "PHYSICAL_INTERACTION"
+                    },
+                    properties: [
+                        {
+                            namespace: sta.interface,
+                            name: sta.property,
+                            value: {
+                                value: wval
+                            },
+                            timeOfSample: new Date(ts).toISOString(),
+                            uncertaintyInMilliseconds: 0
+                        }
+                    ]
+                }
+            }
+        }
+    };
+    if (sta.scale)
+        reqjson.event.payload.change.properties[0].value.scale = sta.scale;
     request({
         method: "POST",
         url: "https://api.eu.amazonalexa.com/v3/events",
         headers: {
             Authorization: "Bearer " + webBearer.access_token,
         },
-        json: {
-            context: {},
-            event: {
-                header: {
-                    messageId: webMessageId(),
-                    namespace: "Alexa",
-                    name: "ChangeReport",
-                    payloadVersion: "3"
-                },
-                endpoint: {
-                    scope: {
-                        type: "BearerToken",
-                        token: webBearer.access_token
-                    },
-                    endpointId: sta.endpoint
-                },
-                payload: {
-                    change: {
-                        cause: {
-                            type: "PHYSICAL_INTERACTION"
-                        },
-                        properties: [
-                            {
-                                namespace: sta.interface,
-                                name: sta.property,
-                                value: {
-                                    value: wval
-                                },
-                                timeOfSample: new Date(ts).toISOString(),
-                                uncertaintyInMilliseconds: 0
-                            }
-                        ]
-                    }
-                }
-            }
-        }
+        json: reqjson
     })
     .then((res) => {})
     .catch((err) => {
