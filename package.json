@@ -4,7 +4,9 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "snyk-protect": "snyk protect",
+    "prepublish": "npm run snyk-protect"
   },
   "repository": {
     "type": "git",
@@ -32,6 +34,8 @@
     "ws": "^5.1.1",
     "yalm": "^4.1.0",
     "yaml": "^0.3.0",
-    "yargs": "^11.0.0"
-  }
+    "yargs": "^11.0.0",
+    "snyk": "^1.317.0"
+  },
+  "snyk": true
 }
